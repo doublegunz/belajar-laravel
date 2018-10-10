@@ -13,4 +13,14 @@ class Customer extends Model
     {
         return $this->hasMany(order_detail::class);
     }
+
+    public function getNameAttribute($value)
+    {
+        return ucfirst($value);
+    }
+
+    public function order()
+    {
+        return $this->hasMany(Order::class);
+    }
 }

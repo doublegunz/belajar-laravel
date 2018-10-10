@@ -9,6 +9,7 @@ use App\Customer;
 use App\Product;
 use App\Order;
 use App\Order_detail;
+use App\Exports\OrderInvoice;
 use App\User;
 use Cookie;
 use DB;
@@ -16,6 +17,108 @@ use PDF;
 
 class OrderController extends Controller
 {
+    public function index(Request $request)
+    {
+        //ambil data customer
+        $customers = Customer::orderBy('name', 'ASC')->get();
+        $users = User::role('kasir')->orderBy('name', 'ASC')->get();
+        $orders = Order::orderBy('created_at', 'DESC')->with('order_detail','customer');
+
+        if (!empty($request->customer_id)) {
+            $orders = $orders->where('customer_id', $request->customer_id);
+        }
+
+        if (!empty($request->user_id)) {
+            $orders = $orders->where('user_id', $request->user_id);
+        }
+
+        if (!empty($request->start_date) && !empty($request->end_date)) {
+            $this->validate($request, [
+                'start_date' => 'nullable|date',
+                'end_date' => 'nullable|date'
+            ]);
+
+            $start_date = Carbon::parse($request->start_date)->format('Y-m-d') . ' 00:00:01';
+            $end_date = Carbon::parse($request->end_date)->format('Y-m-d') . ' 23:59:59';
+
+            $orders = $orders->whereBetween('created_at', [$start_date, $end_date])->get();
+        } else {
+            //jika start date dan end date kosong, maka load 10 data terbaru
+            $orders = $orders->take(10)->skip(0)->get();
+        }
+
+        return view('orders.index', [
+            'orders' => $orders,
+            'sold' => $this->countItem($orders),
+            'total' => $this->countTotal($orders),
+            'total_customer' => $this->countCustomer($orders),
+            'customers' => $customers,
+            'users' => $users
+        ]);
+    }
+
+    private function countCustomer($orders)
+    {
+        //definisikan array kosong
+        $customer = [];
+        //jika terdapat data yang akan ditampilkan
+        if ($orders->count() > 0) {
+            //looping untuk menyimpan email
+            foreach ($orders as $row) {
+                $customer[] = $row->customer->email;
+            }
+        }
+
+        return count(array_unique($customer));
+    }
+
+    private function countTotal($orders)
+    {
+        //default total
+        $total = 0;
+
+        if ($orders->count() > 0) {
+            $sub_total = $orders->pluck('total')->all();
+            $total = array_sum($sub_total);
+        }
+
+        return $total;
+    }
+
+    private function countItem($order)
+    {
+        //default data
+        $data = 0;
+
+        if ($order->count() > 0) {
+            foreach ($order as $row) {
+                $qty = $row->order_detail->pluck('qty')->all();
+                $val = array_sum($qty);
+                $data += $val;
+            }
+        }
+        return $data;
+    }
+
+    public function invoicePdf($invoice)
+    {
+        //mengambil data transaksi berdasarkan invoice
+        $order = Order::where('invoice', $invoice)
+            ->with('customer', 'order_detail', 'order_detail.product')->first();
+
+        //set config pdf
+        $pdf = PDF:: setOptions(['dpi' => 150, 'defaultFont' => 'sans-serif'])
+            ->loadView('orders.report.invoice', compact('order'));
+        
+        return $pdf->stream();
+
+    }
+
+    public function invoiceExcel($invoice)
+    {
+        return (new OrderInvoice($invoice))->download('invoice-' . $invoice . '.xlsx');
+    }
+
     public function addOrder()
     {
         $products = Product::orderBy('created_at', 'DESC')->get();
